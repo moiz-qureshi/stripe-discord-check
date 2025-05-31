@@ -9,7 +9,7 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-// --- ASSIGN ROLE ENDPOINT with full debug ---
+// --- ASSIGN ROLE ENDPOINT with live fetch and full debug ---
 app.post("/assign-role", async (req, res) => {
   const { discordUsername, role } = req.body;
 
@@ -17,46 +17,43 @@ app.post("/assign-role", async (req, res) => {
     return res.status(400).json({ error: "Missing fields" });
   }
 
-  const guild = client.guilds.cache.first(); // OR use: client.guilds.cache.get('YOUR_GUILD_ID')
+  const guild = client.guilds.cache.first(); // Or client.guilds.cache.get('YOUR_GUILD_ID')
   if (!guild) return res.status(500).json({ error: "Guild not found" });
 
-  // 🔍 Debug: List all members
-  console.log("📋 Server members list:");
-  guild.members.cache.forEach((m) => {
-    console.log(`- ${m.user.username} (${m.user.tag})`);
-  });
-
-  // 🔍 Debug: What username are we searching for?
-  console.log("🧪 Searching for:", discordUsername);
-
-  const member = guild.members.cache.find(
-    (m) =>
-      m.user.username.toLowerCase() === discordUsername.toLowerCase() ||
-      m.user.tag?.toLowerCase() === discordUsername.toLowerCase()
-  );
-
-  // 🔍 Debug: Did we find a member?
-  console.log("🧪 Found member:", member?.user?.tag || "Not found");
-
-  if (!member) {
-    return res.status(404).json({ error: "User not found in guild" });
-  }
-
-  const roleObj = guild.roles.cache.find(
-    (r) => r.name.toLowerCase() === role.toLowerCase()
-  );
-
-  if (!roleObj) {
-    console.error("❌ Role not found:", role);
-    return res.status(404).json({ error: "Role not found" });
-  }
-
   try {
+    // ✅ Fetch all members to ensure full list is available
+    const fetchedMembers = await guild.members.fetch();
+    console.log(`📥 Fetched ${fetchedMembers.size} members`);
+
+    // 🔍 Search for the user using multiple possible fields
+    const member = fetchedMembers.find(
+      (m) =>
+        m.user.username.toLowerCase() === discordUsername.toLowerCase() ||
+        m.user.tag?.toLowerCase() === discordUsername.toLowerCase() ||
+        m.displayName?.toLowerCase() === discordUsername.toLowerCase()
+    );
+
+    console.log("🧪 Searching for:", discordUsername);
+    console.log("🧪 Found member:", member?.user?.tag || "Not found");
+
+    if (!member) {
+      return res.status(404).json({ error: "User not found in guild" });
+    }
+
+    const roleObj = guild.roles.cache.find(
+      (r) => r.name.toLowerCase() === role.toLowerCase()
+    );
+
+    if (!roleObj) {
+      console.error("❌ Role not found:", role);
+      return res.status(404).json({ error: "Role not found" });
+    }
+
     await member.roles.add(roleObj);
     console.log(`[✅] Added role ${role} to ${discordUsername}`);
     return res.status(200).json({ success: true });
   } catch (err) {
-    console.error("[❌] Role add failed:", err);
+    console.error("❌ Failed during member fetch or role assignment:", err);
     return res.status(500).json({ error: err.message });
   }
 });
