@@ -54,6 +54,13 @@ app.post("/assign-role", async (req, res) => {
 
     await member.roles.add(roleObj);
     console.log(`[✅] Added role VIP CLAN MEMBER to ${discordUsername}`);
+
+    // 📣 Send welcome message to #general
+    const channel = guild.channels.cache.find(ch => ch.name === "general" && ch.isTextBased());
+    if (channel) {
+      channel.send(`🎉 <@${member.user.id}> just became a **VIP Clan Member**! Welcome to the elite.`);
+    }
+
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error("❌ Failed during member fetch or role assignment:", err);
@@ -76,4 +83,3 @@ client.login(process.env.DISCORD_BOT_TOKEN);
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`HTTP server running on port ${PORT}`));
-
