@@ -9,12 +9,12 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-// --- ASSIGN ROLE ENDPOINT with live fetch and full debug ---
+// --- ASSIGN ROLE ENDPOINT with live fetch and hardcoded role ---
 app.post("/assign-role", async (req, res) => {
-  const { discordUsername, role } = req.body;
+  const { discordUsername } = req.body;
 
-  if (!discordUsername || !role) {
-    return res.status(400).json({ error: "Missing fields" });
+  if (!discordUsername) {
+    return res.status(400).json({ error: "Missing discordUsername" });
   }
 
   const guild = client.guilds.cache.first(); // Or client.guilds.cache.get('YOUR_GUILD_ID')
@@ -40,17 +40,20 @@ app.post("/assign-role", async (req, res) => {
       return res.status(404).json({ error: "User not found in guild" });
     }
 
+    // ✅ Hardcoded role name
+    console.log("🎯 Using hardcoded role: VIP CLAN MEMBER");
+
     const roleObj = guild.roles.cache.find(
-      (r) => r.name.toLowerCase() === role.toLowerCase()
+      (r) => r.name.toLowerCase() === "vip clan member"
     );
 
     if (!roleObj) {
-      console.error("❌ Role not found:", role);
+      console.error("❌ Role not found: VIP CLAN MEMBER");
       return res.status(404).json({ error: "Role not found" });
     }
 
     await member.roles.add(roleObj);
-    console.log(`[✅] Added role ${role} to ${discordUsername}`);
+    console.log(`[✅] Added role VIP CLAN MEMBER to ${discordUsername}`);
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error("❌ Failed during member fetch or role assignment:", err);
