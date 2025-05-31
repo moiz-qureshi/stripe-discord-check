@@ -9,7 +9,7 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-// Endpoint for Stripe webhook to trigger
+// --- ASSIGN ROLE ENDPOINT (updated matching logic) ---
 app.post("/assign-role", async (req, res) => {
   const { discordUsername, role } = req.body;
 
@@ -18,11 +18,13 @@ app.post("/assign-role", async (req, res) => {
   }
 
   const guild = client.guilds.cache.first(); // OR use: client.guilds.cache.get('YOUR_GUILD_ID')
-
   if (!guild) return res.status(500).json({ error: "Guild not found" });
 
+  // ✅ Match both new usernames and legacy tags
   const member = guild.members.cache.find(
-    (m) => m.user.tag.toLowerCase() === discordUsername.toLowerCase()
+    (m) =>
+      m.user.username.toLowerCase() === discordUsername.toLowerCase() ||
+      m.user.tag?.toLowerCase() === discordUsername.toLowerCase()
   );
 
   if (!member) {
@@ -61,3 +63,4 @@ client.login(process.env.DISCORD_BOT_TOKEN);
 // Render default port
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`HTTP server running on port ${PORT}`));
+
