@@ -1,91 +1,112 @@
-require("dotenv").config();
-const { Client, GatewayIntentBits } = require("discord.js");
-const express = require("express");
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const crypto = require('crypto');
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-});
+// 🔐 Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-const app = express();
-app.use(express.json());
+/**
+ * Helper to buffer raw request body for Stripe signature validation
+ */
+async function buffer(readable) {
+  const chunks = [];
+  for await (const chunk of readable) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
-// --- ASSIGN ROLE ENDPOINT with live fetch and hardcoded role ---
-app.post("/assign-role", async (req, res) => {
-  const { discordUsername } = req.body;
-
-  if (!discordUsername) {
-    return res.status(400).json({ error: "Missing discordUsername" });
+/**
+ * Vercel webhook handler
+ */
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
   }
 
-  const guild = client.guilds.cache.first(); // Or client.guilds.cache.get('YOUR_GUILD_ID')
-  if (!guild) return res.status(500).json({ error: "Guild not found" });
+  const sig = req.headers['stripe-signature'];
+  const buf = await buffer(req);
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  let event;
 
   try {
-    // ✅ Fetch all members to ensure full list is available
-    const fetchedMembers = await guild.members.fetch();
-    console.log(`📥 Fetched ${fetchedMembers.size} members`);
+    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+  } catch (err) {
+    console.error('❌ Stripe signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
-    // 🔍 Search for the user using multiple possible fields
-    const member = fetchedMembers.find(
-      (m) =>
-        m.user.username.toLowerCase() === discordUsername.toLowerCase() ||
-        m.user.tag?.toLowerCase() === discordUsername.toLowerCase() ||
-        m.displayName?.toLowerCase() === discordUsername.toLowerCase()
-    );
+  // 🔁 Supabase deduplication
+  const { data: existing } = await supabase
+    .from('processed_events')
+    .select('id')
+    .eq('id', event.id)
+    .maybeSingle();
 
-    console.log("🧪 Searching for:", discordUsername);
-    console.log("🧪 Found member:", member?.user?.tag || "Not found");
+  if (existing) {
+    console.log("⚠️ Duplicate event detected via Supabase:", event.id);
+    return res.status(200).send('Already processed');
+  }
+
+  await supabase.from('processed_events').insert({ id: event.id });
+
+  // ✅ Handle successful payment
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const { discordUsername, platform, email, gamerTag } = session.metadata;
+
+    console.log(`✅ Payment received for ${discordUsername} (${email})`);
+
+    // Normalize usernames by converting both to lowercase
+    const normalizedDiscordUsername = discordUsername.toLowerCase();
+
+    // Try to find the member in the Discord guild
+    const guild = client.guilds.cache.first(); // Or use a specific guild ID
+    if (!guild) {
+      console.error("❌ Guild not found.");
+      return res.status(500).send('Guild not found');
+    }
+
+    const member = guild.members.cache.find(m => m.user.username.toLowerCase() === normalizedDiscordUsername);
 
     if (!member) {
+      console.log(`❌ User ${discordUsername} not found in the guild`);
       return res.status(404).json({ error: "User not found in guild" });
     }
 
-    // ✅ Hardcoded role name
-    console.log("🎯 Using hardcoded role: VIP CLAN MEMBER");
-
-    const roleObj = guild.roles.cache.find(
-      (r) => r.name.toLowerCase() === "vip clan member"
-    );
-
+    // Hardcode the role name
+    const roleObj = guild.roles.cache.find(r => r.name.toLowerCase() === 'vip clan member');
     if (!roleObj) {
-      console.error("❌ Role not found: VIP CLAN MEMBER");
+      console.error('❌ Role not found: VIP CLAN MEMBER');
       return res.status(404).json({ error: "Role not found" });
     }
 
-    await member.roles.add(roleObj);
-    console.log(`[✅] Added role VIP CLAN MEMBER to ${discordUsername}`);
+    try {
+      await member.roles.add(roleObj);
+      console.log(`[✅] Added role VIP CLAN MEMBER to ${discordUsername}`);
+      
+      // Send success message to Discord
+      const channel = guild.channels.cache.find(ch => ch.name === "general" && ch.isTextBased());
+      if (channel) {
+        channel.send(`🎉 <@${member.user.id}> just became a **VIP Clan Member**! Welcome to the elite.`);
+      }
 
-    // 📣 Send welcome message to #general or matching
-    const channel = guild.channels.cache.find(
-      ch => ch.name.toLowerCase().endsWith("general") && ch.isTextBased()
-    );
-
-    if (channel) {
-      await channel.send(`🎉 <@${member.user.id}> just became a **VIP Clan Member**! Welcome to the elite.`);
-    } else {
-      console.warn("⚠️ Could not find a 'general'-like text channel.");
+      return res.status(200).send('Webhook received and role assigned');
+    } catch (err) {
+      console.error("❌ Error assigning role:", err);
+      return res.status(500).json({ error: err.message });
     }
-
-    return res.status(200).json({ success: true });
-  } catch (err) {
-    console.error("❌ Failed during member fetch or role assignment:", err);
-    return res.status(500).json({ error: err.message });
   }
-});
 
-// --- Root health check ---
-app.get("/", (req, res) => {
-  res.send("Bot is alive 🚀");
-});
+  return res.status(200).send('Webhook received');
+};
 
-// --- Start bot ---
-client.once("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-});
-
-client.login(process.env.DISCORD_BOT_TOKEN);
-
-// --- Start server ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`HTTP server running on port ${PORT}`));
-
+// Required for raw body parsing in Vercel
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
